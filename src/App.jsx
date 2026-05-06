@@ -166,7 +166,12 @@ export default function App() {
   // Sync venues from Firebase on mount
   useEffect(() => {
     fbGet('venues').then(data => {
-      if (data) setVenues(prev => ({ ...DEMO_VENUES, ...data }));
+      const merged = { ...DEMO_VENUES, ...(data || {}) };
+      setVenues(merged);
+      // Push demo venues to Firebase if not there yet
+      if (!data || !data['allin']) {
+        fbSet('venues/allin', DEMO_VENUES['allin']);
+      }
     });
   }, []);
 
@@ -905,23 +910,28 @@ function VenuePage({ go, venue, updateQueue, showToast }) {
 // ─── DJ PAGE ─────────────────────────────────────────────────────
 function DJPage({ go, venue, updateQueue, showToast }) {
   const [authed, setAuthed] = useState(() => {
-    return sessionStorage.getItem(`dj_auth_${venue?.slug}`) === 'true';
+    const s = venue?.slug || window.location.pathname.split('/')[1];
+    return sessionStorage.getItem(`dj_auth_${s}`) === 'true';
   });
   const [code, setCode] = useState('');
-  const [venueData, setVenueData] = useState(venue);
+  const slug = venue?.slug || window.location.pathname.split('/')[1];
+  const [venueData, setVenueData] = useState(venue || DEMO_VENUES[slug] || null);
 
   useEffect(() => {
-    if (!venue && routeParam) {
-      fbGet(`venues/${routeParam}`).then(data => {
-        if (data) setVenueData(data);
-      });
-    } else {
-      setVenueData(venue);
-    }
-  }, [venue?.slug]);
+    // Try local state first, then Firebase
+    const local = venue || DEMO_VENUES[slug];
+    if (local) { setVenueData(local); return; }
+    fbGet(`venues/${slug}`).then(data => {
+      if (data) setVenueData(data);
+    });
+  }, [slug]);
 
-  const activeVenue = venueData || venue;
-  if (!activeVenue) return <NotFound go={go} />;
+  const activeVenue = venueData;
+  if (!activeVenue) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>
+      Carregando...
+    </div>
+  );
 
   const tryLogin = () => {
     if (code === activeVenue.djPassword) {
