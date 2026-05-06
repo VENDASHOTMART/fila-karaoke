@@ -1,5 +1,49 @@
 import { useState, useEffect, useRef } from "react";
 
+
+// ─── FIREBASE REALTIME DB ───────────────────────────────────────
+const FB = "https://fila-karaoke-d431c-default-rtdb.firebaseio.com";
+
+const fbGet = async (path) => {
+  try {
+    const r = await fetch(`${FB}/${path}.json`);
+    return await r.json();
+  } catch(e) { return null; }
+};
+
+const fbSet = async (path, data) => {
+  try {
+    await fetch(`${FB}/${path}.json`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+  } catch(e) {}
+};
+
+const fbPatch = async (path, data) => {
+  try {
+    await fetch(`${FB}/${path}.json`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+  } catch(e) {}
+};
+
+const fbListen = (path, callback) => {
+  const url = `${FB}/${path}.json`;
+  let lastData = null;
+  const poll = async () => {
+    const data = await fbGet(path);
+    const str = JSON.stringify(data);
+    if (str !== lastData) { lastData = str; callback(data); }
+  };
+  poll();
+  const interval = setInterval(poll, 2000);
+  return () => clearInterval(interval);
+};
+
 // ─── DESIGN TOKENS ──────────────────────────────────────────────
 const C = {
   bg: '#07060F',
@@ -103,27 +147,28 @@ const PLANS = [
 // ─── ROOT APP ────────────────────────────────────────────────────
 export default function App() {
   const getInitialRoute = () => {
-    const path = window.location.pathname.replace(/^\//, '').replace(/\/$/, '');
-    if (path && path !== '' && path !== 'dj') return { route: 'venue', param: path };
-    if (path === 'dj') return { route: 'dj', param: null };
+    const path = window.location.pathname.replace(/^[/]/, '').replace(/[/]$/, '').split('/');
+    const slug = path[0];
+    const sub = path[1];
+    if (slug === 'dashboard' && path[1]) return { route: 'dashboard', param: path[1] };
+    if (slug === 'entrar') return { route: 'register', param: 'login' };
+    if (sub === 'dj' && slug) return { route: 'dj', param: slug };
+    if (slug && slug !== '') return { route: 'venue', param: slug };
     return { route: 'landing', param: null };
   };
   const _init = getInitialRoute();
   const [route, setRoute] = useState(_init.route);
   const [routeParam, setRouteParam] = useState(_init.param);
-  const [venues, setVenues] = useState(() => {
-    try {
-      const saved = localStorage.getItem('fila_karaoke_venues');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Always keep demo venue
-        return { ...DEMO_VENUES, ...parsed };
-      }
-    } catch(e) {}
-    return DEMO_VENUES;
-  });
+  const [venues, setVenues] = useState(DEMO_VENUES);
   const [toast, setToast] = useState(null);
   const toastRef = useRef(null);
+
+  // Sync venues from Firebase on mount
+  useEffect(() => {
+    fbGet('venues').then(data => {
+      if (data) setVenues(prev => ({ ...DEMO_VENUES, ...data }));
+    });
+  }, []);
 
   const go = (r, param = null) => {
     setRoute(r);
@@ -143,11 +188,8 @@ export default function App() {
   };
 
   const updateVenueQueue = (slug, newQueue) => {
-    setVenues(prev => {
-      const updated = { ...prev, [slug]: { ...prev[slug], queue: newQueue } };
-      try { localStorage.setItem('fila_karaoke_venues', JSON.stringify(updated)); } catch(e) {}
-      return updated;
-    });
+    setVenues(prev => ({ ...prev, [slug]: { ...prev[slug], queue: newQueue } }));
+    fbSet(`venues/${slug}/queue`, newQueue);
   };
 
   const registerVenue = (data) => {
@@ -163,11 +205,8 @@ export default function App() {
       queue: [],
       stats: { totalSessions: 0, avgQueueSize: 0, totalSingers: 0 },
     };
-    setVenues(prev => {
-      const updated = { ...prev, [data.slug]: venue };
-      try { localStorage.setItem('fila_karaoke_venues', JSON.stringify(updated)); } catch(e) {}
-      return updated;
-    });
+    setVenues(prev => ({ ...prev, [data.slug]: venue }));
+    fbSet(`venues/${data.slug}`, venue);
     return venue;
   };
 
@@ -371,8 +410,17 @@ function RegisterPage({ go, venues, registerVenue, showToast, routeParam }) {
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
-  const handleLogin = () => {
-    const venue = Object.values(venues).find(v => v.ownerEmail === loginForm.email && v.ownerPassword === loginForm.password);
+  const handleLogin = async () => {
+    // Check local state first
+    let venue = Object.values(venues).find(v => v.ownerEmail === loginForm.email && v.ownerPassword === loginForm.password);
+    if (!venue) {
+      // Fetch from Firebase
+      const fbVenues = await fbGet('venues');
+      if (fbVenues) {
+        venue = Object.values(fbVenues).find(v => v.ownerEmail === loginForm.email && v.ownerPassword === loginForm.password);
+        if (venue) setVenues(prev => ({ ...prev, [venue.slug]: venue }));
+      }
+    }
     if (venue) { go('dashboard', venue.slug); }
     else showToast('E-mail ou senha incorretos', 'error');
   };
@@ -505,9 +553,19 @@ function DashboardPage({ go, venue, updateQueue, showToast }) {
 
   if (!venue) return <NotFound go={go} />;
 
-  const active = venue.queue.filter(e => e.status !== 'done');
-  const current = venue.queue.find(e => e.status === 'singing');
-  const waiting = venue.queue.filter(e => e.status === 'waiting');
+  const [liveQueue, setLiveQueue] = useState(venue?.queue || []);
+
+  useEffect(() => {
+    if (!venue) return;
+    const unsub = fbListen(`venues/${venue.slug}/queue`, (data) => {
+      if (data) setLiveQueue(Array.isArray(data) ? data : Object.values(data));
+    });
+    return unsub;
+  }, [venue?.slug]);
+
+  const active = liveQueue.filter(e => e.status !== 'done');
+  const current = liveQueue.find(e => e.status === 'singing');
+  const waiting = liveQueue.filter(e => e.status === 'waiting');
 
   const planInfo = PLANS.find(p => p.id === venue.plan) || PLANS[0];
 
@@ -662,7 +720,17 @@ function VenuePage({ go, venue, updateQueue, showToast }) {
 
   if (!venue) return <NotFound go={go} />;
 
-  const queue = venue.queue;
+  const [liveQueue, setLiveQueue] = useState(venue?.queue || []);
+
+  useEffect(() => {
+    if (!venue) return;
+    const unsub = fbListen(`venues/${venue.slug}/queue`, (data) => {
+      if (data) setLiveQueue(Array.isArray(data) ? data : Object.values(data));
+    });
+    return unsub;
+  }, [venue?.slug]);
+
+  const queue = liveQueue;
   const activeQueue = queue.filter(e => e.status !== 'done');
   const current = queue.find(e => e.status === 'singing');
   const myPos = myEntry ? activeQueue.findIndex(e => e.id === myEntry.id) + 1 : null;
@@ -867,7 +935,17 @@ function DJPage({ go, venue, updateQueue, showToast }) {
     </div>
   );
 
-  const queue = venue.queue;
+  const [liveQueue, setLiveQueue] = useState(venue?.queue || []);
+
+  useEffect(() => {
+    if (!venue) return;
+    const unsub = fbListen(`venues/${venue.slug}/queue`, (data) => {
+      if (data) setLiveQueue(Array.isArray(data) ? data : Object.values(data));
+    });
+    return unsub;
+  }, [venue?.slug]);
+
+  const queue = liveQueue;
   const current = queue.find(e => e.status === 'singing');
   const waiting = queue.filter(e => e.status === 'waiting');
   const done = queue.filter(e => e.status === 'done');
