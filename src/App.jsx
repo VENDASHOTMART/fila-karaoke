@@ -102,13 +102,39 @@ const PLANS = [
 
 // ─── ROOT APP ────────────────────────────────────────────────────
 export default function App() {
-  const [route, setRoute] = useState('landing');
-  const [routeParam, setRouteParam] = useState(null);
-  const [venues, setVenues] = useState(DEMO_VENUES);
+  const getInitialRoute = () => {
+    const path = window.location.pathname.replace(/^\//, '').replace(/\/$/, '');
+    if (path && path !== '' && path !== 'dj') return { route: 'venue', param: path };
+    if (path === 'dj') return { route: 'dj', param: null };
+    return { route: 'landing', param: null };
+  };
+  const _init = getInitialRoute();
+  const [route, setRoute] = useState(_init.route);
+  const [routeParam, setRouteParam] = useState(_init.param);
+  const [venues, setVenues] = useState(() => {
+    try {
+      const saved = localStorage.getItem('fila_karaoke_venues');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Always keep demo venue
+        return { ...DEMO_VENUES, ...parsed };
+      }
+    } catch(e) {}
+    return DEMO_VENUES;
+  });
   const [toast, setToast] = useState(null);
   const toastRef = useRef(null);
 
-  const go = (r, param = null) => { setRoute(r); setRouteParam(param); window.scrollTo(0, 0); };
+  const go = (r, param = null) => {
+    setRoute(r);
+    setRouteParam(param);
+    window.scrollTo(0, 0);
+    if (r === 'venue' && param) window.history.pushState({}, '', '/' + param);
+    else if (r === 'dj' && param) window.history.pushState({}, '', '/' + param + '/dj');
+    else if (r === 'landing') window.history.pushState({}, '', '/');
+    else if (r === 'register') window.history.pushState({}, '', '/entrar');
+    else if (r === 'dashboard' && param) window.history.pushState({}, '', '/dashboard/' + param);
+  };
 
   const showToast = (msg, type = 'info') => {
     if (toastRef.current) clearTimeout(toastRef.current);
@@ -117,7 +143,11 @@ export default function App() {
   };
 
   const updateVenueQueue = (slug, newQueue) => {
-    setVenues(prev => ({ ...prev, [slug]: { ...prev[slug], queue: newQueue } }));
+    setVenues(prev => {
+      const updated = { ...prev, [slug]: { ...prev[slug], queue: newQueue } };
+      try { localStorage.setItem('fila_karaoke_venues', JSON.stringify(updated)); } catch(e) {}
+      return updated;
+    });
   };
 
   const registerVenue = (data) => {
@@ -133,7 +163,11 @@ export default function App() {
       queue: [],
       stats: { totalSessions: 0, avgQueueSize: 0, totalSingers: 0 },
     };
-    setVenues(prev => ({ ...prev, [data.slug]: venue }));
+    setVenues(prev => {
+      const updated = { ...prev, [data.slug]: venue };
+      try { localStorage.setItem('fila_karaoke_venues', JSON.stringify(updated)); } catch(e) {}
+      return updated;
+    });
     return venue;
   };
 
