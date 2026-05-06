@@ -581,7 +581,7 @@ function DashboardPage({ go, venue, updateQueue, showToast }) {
             <span style={{ fontSize: 11, background: planInfo.popular ? C.accentLight : C.surface3, color: planInfo.popular ? C.accent : C.muted, padding: '3px 10px', borderRadius: 20, fontWeight: 600 }}>{planInfo.name}</span>
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
-            <button style={{ ...S.btnOutline, padding: '8px 16px', fontSize: 13 }} className="btn-hover" onClick={() => go('venue', venue.slug)}>
+            <button style={{ ...S.btnOutline, padding: '8px 16px', fontSize: 13 }} className="btn-hover" onClick={() => go('venue', activeVenue.slug)}>
               👁️ Ver como cliente
             </button>
             <button style={{ ...S.btn, width: 'auto', padding: '8px 16px', fontSize: 13, background: `linear-gradient(135deg, ${C.cyan}CC, #0FA8C4)` }} className="btn-hover" onClick={() => go('dj', venue.slug)}>
@@ -904,14 +904,30 @@ function VenuePage({ go, venue, updateQueue, showToast }) {
 
 // ─── DJ PAGE ─────────────────────────────────────────────────────
 function DJPage({ go, venue, updateQueue, showToast }) {
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState(() => {
+    return sessionStorage.getItem(`dj_auth_${venue?.slug}`) === 'true';
+  });
   const [code, setCode] = useState('');
+  const [venueData, setVenueData] = useState(venue);
 
-  if (!venue) return <NotFound go={go} />;
+  useEffect(() => {
+    if (!venue && routeParam) {
+      fbGet(`venues/${routeParam}`).then(data => {
+        if (data) setVenueData(data);
+      });
+    } else {
+      setVenueData(venue);
+    }
+  }, [venue?.slug]);
+
+  const activeVenue = venueData || venue;
+  if (!activeVenue) return <NotFound go={go} />;
 
   const tryLogin = () => {
-    if (code === venue.djPassword) { setAuthed(true); }
-    else { showToast('Senha incorreta', 'error'); }
+    if (code === activeVenue.djPassword) {
+      setAuthed(true);
+      sessionStorage.setItem(`dj_auth_${activeVenue.slug}`, 'true');
+    } else { showToast('Senha incorreta', 'error'); }
   };
 
   if (!authed) return (
@@ -920,7 +936,7 @@ function DJPage({ go, venue, updateQueue, showToast }) {
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ width: 64, height: 64, borderRadius: 16, background: `linear-gradient(135deg, ${C.cyan}33, ${C.cyan}11)`, border: `1px solid ${C.cyan}44`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, margin: '0 auto 14px' }}>🎧</div>
           <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 22, fontWeight: 800, marginBottom: 6 }}>Painel do DJ</h2>
-          <p style={{ color: C.muted, fontSize: 13 }}>{venue.name}</p>
+          <p style={{ color: C.muted, fontSize: 13 }}>{activeVenue.name}</p>
         </div>
         <div style={S.card}>
           <Field label="Senha do DJ" type="password" placeholder="••••••••" value={code} onChange={setCode} onEnter={tryLogin} autoFocus />
@@ -929,7 +945,7 @@ function DJPage({ go, venue, updateQueue, showToast }) {
           </button>
         </div>
         <div style={{ textAlign: 'center', marginTop: 12 }}>
-          <span className="nav-link" style={{ fontSize: 13, color: C.muted }} onClick={() => go('venue', venue.slug)}>← Voltar para a fila</span>
+          <span className="nav-link" style={{ fontSize: 13, color: C.muted }} onClick={() => go('venue', activeVenue.slug)}>← Voltar para a fila</span>
         </div>
       </div>
     </div>
@@ -938,12 +954,12 @@ function DJPage({ go, venue, updateQueue, showToast }) {
   const [liveQueue, setLiveQueue] = useState(venue?.queue || []);
 
   useEffect(() => {
-    if (!venue) return;
-    const unsub = fbListen(`venues/${venue.slug}/queue`, (data) => {
+    if (!activeVenue) return;
+    const unsub = fbListen(`venues/${activeVenue.slug}/queue`, (data) => {
       if (data) setLiveQueue(Array.isArray(data) ? data : Object.values(data));
     });
     return unsub;
-  }, [venue?.slug]);
+  }, [activeVenue?.slug]);
 
   const queue = liveQueue;
   const current = queue.find(e => e.status === 'singing');
@@ -982,7 +998,7 @@ function DJPage({ go, venue, updateQueue, showToast }) {
               <div style={{ fontSize: 11, color: C.muted }}>{venue.name}</div>
             </div>
           </div>
-          <button style={{ ...S.btnOutline, padding: '7px 14px', fontSize: 12 }} className="btn-hover" onClick={() => go('venue', venue.slug)}>
+          <button style={{ ...S.btnOutline, padding: '7px 14px', fontSize: 12 }} className="btn-hover" onClick={() => go('venue', activeVenue.slug)}>
             👁️ Fila pública
           </button>
         </div>
